@@ -28,6 +28,23 @@ def parse_ip (ip, var_name)
   end
 end
 
+def validate_max_header_kb (kb)
+  if kb < 1 or kb > 1024
+    raise "Invalid router.max_header_kb value. Must be between 1 and 1,024 kb"
+  end
+  kb * 1024
+end
+
+def get_valid_ca_certs
+  ca_certs = p('router.ca_certs')
+
+  if !ca_certs.is_a?(Array)
+    raise 'ca_certs must be provided as an array of strings containing one or more certificates in PEM encoding'
+  end
+
+  ca_certs.select{ |v| !v.nil? && !v.strip.empty? && v.length > 50 }
+end
+
 parse_ip(p('router.debug_address'), 'router.debug_address')
 
 access_log_file = p('router.write_access_logs_locally') ? '/var/vcap/sys/log/gorouter/access.log' : ''
@@ -64,6 +81,7 @@ params = {
   'healthcheck_user_agent' => p('router.healthcheck_user_agent'),
   'endpoint_timeout' => "#{p('request_timeout_in_seconds')}s",
   'endpoint_dial_timeout' => "#{p('endpoint_dial_timeout_in_seconds')}s",
+  'websocket_dial_timeout' => "#{p('websocket_dial_timeout_in_seconds') != "endpoint_dial_timeout_in_seconds" ? p('websocket_dial_timeout_in_seconds') : p('endpoint_dial_timeout_in_seconds')}s",
   'tls_handshake_timeout' => "#{p('tls_handshake_timeout_in_seconds')}s",
   'start_response_delay_interval' => "#{p('router.requested_route_registration_interval_in_seconds')}s",
   'load_balancer_healthy_threshold' => "#{p('router.load_balancer_healthy_threshold')}s",
@@ -79,7 +97,9 @@ params = {
   'route_services_secret_decrypt_only' => p('router.route_services_secret_decrypt_only'),
   'route_services_recommend_https' => p('router.route_services_recommend_https'),
   'route_services_hairpinning' => p('router.route_services_internal_lookup'),
+  'route_services_hairpinning_allowlist' => p('router.route_services_internal_lookup_allowlist'),
   'extra_headers_to_log' => p('router.extra_headers_to_log'),
+  'max_header_bytes' => validate_max_header_kb(p('router.max_header_kb')),
   'token_fetcher_max_retries' => 3,
   'token_fetcher_retry_interval' => '5s',
   'token_fetcher_expiration_buffer_time' => 30,
@@ -207,7 +227,15 @@ if (backend_cert_chain != '') ^ (backend_private_key != '')
   raise 'backends.cert_chain and backends.private_key must be both provided or not at all'
 end
 
+backend_attempts = 3
+if_p('router.backends.max_attempts') { |val| backend_attempts = val }
+
+if (backend_attempts < 0 )
+  raise 'router.backends.max_attempts cannot be negative'
+end
+
 backends = {
+  'max_attempts' => backend_attempts,
   'max_conns' => p('router.backends.max_conns'),
   'cert_chain' => backend_cert_chain,
   'private_key' => backend_private_key,
@@ -224,7 +252,15 @@ if (route_services_cert_chain != '') ^ (route_services_private_key != '')
   raise 'route_services.cert_chain and route_services.private_key must be both provided or not at all'
 end
 
+route_service_attempts = 3
+if_p('router.route_services.max_attempts') { |val| route_service_attempts = val }
+
+if (route_service_attempts < 1 )
+  raise 'router.route_services.max_attempts must maintain a minimum value of 1'
+end
+
 route_services = {
+  'max_attempts' => route_service_attempts,
   'cert_chain' => route_services_cert_chain,
   'private_key' => route_services_private_key,
 }
@@ -358,12 +394,7 @@ params['disable_http'] = p('router.disable_http')
 params['enable_http2'] = p('router.enable_http2')
 
 if p('router.ca_certs')
-  ca_certs = p('router.ca_certs')
-  if !ca_certs.is_a?(String)
-    raise 'ca_certs must be provided as a single string block'
-  end
-
-  params['ca_certs'] = ca_certs
+  params['ca_certs'] = get_valid_ca_certs
 end
 
 if p('router.client_ca_certs')
@@ -372,8 +403,10 @@ if p('router.client_ca_certs')
     raise 'client_ca_certs must be provided as a single string block'
   end
 
-  if p('router.only_trust_client_ca_certs') == false
-    client_ca_certs += ca_certs
+  ca_certs = get_valid_ca_certs
+
+  if p('router.only_trust_client_ca_certs') == false && ca_certs
+    client_ca_certs += "\n" + ca_certs.join("\n")
   end
 
   params['client_ca_certs'] = client_ca_certs
