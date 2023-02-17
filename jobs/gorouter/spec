@@ -10,7 +10,6 @@ templates:
   dns_health_check.erb: bin/dns_health_check
   nats_client.erb: bin/nats_client
   gorouter.yml.erb: config/gorouter.yml
-  healthchecker.yml.erb: config/healthchecker.yml
   prom_scraper_config.yml.erb: config/prom_scraper_config.yml
   prometheus.crt.erb: config/certs/prometheus/prometheus.crt
   prometheus.key.erb: config/certs/prometheus/prometheus.key
@@ -22,17 +21,15 @@ templates:
   retrieve-local-routes.erb: bin/retrieve-local-routes
   indicators.yml.erb: config/indicators.yml
   error.html.erb: config/error.html
+  restart-gorouter.erb: bin/restart-gorouter
 
 packages:
   - routing_utils
   - gorouter
-  - routing-healthchecker
 
 provides:
   - name: gorouter
     type: http-router
-    properties:
-    - router.backends.ca
 
 consumes:
 - name: nats
@@ -152,21 +149,13 @@ properties:
           -----BEGIN RSA PRIVATE KEY-----
           -----END RSA PRIVATE KEY-----
   router.ca_certs:
-    description: "Required. List of Strings of concatenated certificate authorities in PEM format, used to validate server certificates provided by remote systems. Gorouter also trust certificates signed by well-known CAs and by CA certificates installed on the filesystem. These CA certificates are also used to validate client certificates when router.only_trust_client_ca_certs is false."
+    description: "Required. String of concatenated certificate authorities in PEM format, used to validate server certificates provided by remote systems. Gorouter also trust certificates signed by well-known CAs and by CA certificates installed on the filesystem. These CA certificates are also used to validate client certificates when router.only_trust_client_ca_certs is false."
   router.client_ca_certs:
     description: "Required. String of concatenated certificate authorities in PEM format, used to validate certificates provided by remote systems. By default, Gorouter will trust certificates signed by well-known CAs and by CA certificates installed on the filesystem."
     default: ""
   router.only_trust_client_ca_certs:
     description: "When router.only_trust_client_ca_certs is true, router.client_ca_certs are the only trusted CA certs for client requests. When router.only_trust_client_ca_certs is false, router.client_ca_certs are trusted in addition to router.ca_certs and the CA certificates installed on the filesystem. This will have no affect if the `router.client_cert_validation` property is set to none."
     default: false
-  router.backends.max_attempts:
-    description: |
-      Maximum number of attempts on failing requests against backend routes.
-      This includes CF apps and route-registrar endpoints.
-      A value of 0 implies indefinite retries, i.e. retry until success or endpoint list is exhausted.
-    default: 3
-  router.backends.ca:
-    description: Certificate authority that was used to sign certificates for TLS-registered backends. In PEM format.
   router.backends.cert_chain:
     description: Certificate chain used for client authentication to TLS-registered backends.  In PEM format.
   router.backends.private_key:
@@ -196,11 +185,6 @@ properties:
         Values will be base64 encoded PEM. Use this value when Gorouter is the first component to terminate TLS.
         Requires `client_cert_validation: request` or `require`.
     default: always_forward
-  router.route_services.max_attempts:
-    description: |
-      Maximum number of attempts on failing requests against route service URLs.
-      The minimum value for this setting is 1. This prevents gorouter from getting blocked by indefinite retries.
-    default: 3
   router.route_services.cert_chain:
     description: Certificate chain used for client authentication to TLS-registered route services.  In PEM format.
   router.route_services.private_key:
@@ -211,9 +195,6 @@ properties:
   router.route_services_internal_lookup:
     description: "setting this property to true causes gorouter to bypass another trip through the load balancer when directing traffic to a route service that is a known route by the gorouter."
     default: false
-  router.route_services_internal_lookup_allowlist:
-    description: "a list of host names for route services that should be resolved internally. Each entry can be a fully qualified domain name or DNS wildcard (i.e. wildcard on 1 segment of a subdomain). If the list is empty, it is not in effect and internal lookup will be attempted for all host names, which can lead to CVE-2019-3789. Please turn on internal lookup only with an allowlist."
-    default: []
   router.route_services_secret_decrypt_only:
     description: "To rotate keys, add your new key here and deploy. Then swap this key with the value of route_services_secret and deploy again."
     default: ""
@@ -223,13 +204,6 @@ properties:
   router.route_services_timeout:
     description: "Expiry time of a route service signature in seconds"
     default: 60
-  router.max_header_kb:
-    description: |
-        This value controls the maximum number of bytes (in KB) the gorouter will read
-        parsing the request header's keys and values, including the request
-        line. It does not limit the size of the request body. Requests with
-        larger headers will result in a 431 status code. Must be between 1 and 1024kb.
-    default: 1024 # 1Mb
   router.extra_headers_to_log:
     description: "An array of headers that access log events will be annotated with. This only applies to headers on requests."
     default: []
@@ -389,13 +363,8 @@ properties:
   endpoint_dial_timeout_in_seconds:
     description: |
       Maximum time in seconds for gorouter to establish a TCP connection with a backend. This timeout comes before `tls_handshake_timeout_in_seconds`
-      and `request_timeout_in_seconds`.
+      and `request_timeout_in_seconds`. This timeout also applies as a read timeout for websocket requests.
     default: 5
-  websocket_dial_timeout_in_seconds:
-    description: |
-      Maximum time in seconds for gorouter to establish a websocket upgrade for the websocket ForwardIO connection with a backend. 
-      This timeout comes before `tls_handshake_timeout_in_seconds` and `request_timeout_in_seconds`. When not set, defaults to `endpoint_dial_timeout_in_seconds`.
-    default: endpoint_dial_timeout_in_seconds
   tls_handshake_timeout_in_seconds:
     description: |
       Maximum time in seconds for gorouter to establish a TLS connection with a backend container. This timeout is for establishing
@@ -438,8 +407,10 @@ properties:
   router.suspend_pruning_if_nats_unavailable:
     description: |
       Suspend pruning of routes when NATs is unavailable and maintain the
-      current routing table. Note: only non-TLS routes are ever pruned.
-    default: true
+      current routing table. WARNING: This strategy favors availability over
+      consistency and there is a possibility of routing to an incorrect
+      endpoint in the case of port re-use. To be used with caution.
+    default: false
 
   uaa.ca_cert:
     description: "Certificate authority for communication between clients and uaa."
@@ -450,7 +421,6 @@ properties:
       Optimize kernel networking settings for GoRouter. If you deploy GoRouter in a container set this to false.
       This configures the following kernel parameters:
         * Increases the number of allowed IP local port ranges specified by the `router.ip_local_port_range` value.
-        * Reserves ports configured for gorouter and other bosh components via /proc/sys/net/ipv4/ip_local_reserved_ports.
         * Reduces the timeout of TCP_FIN_TIMEOUT, so that TCP/IP can release closed connections faster, making more
           resources available for new connections.
         * Disables TCP_TW_RECYCLE to enable fast recycling of TIME_WAIT sockets.
@@ -495,7 +465,3 @@ properties:
   router.max_open_files:
     description: "The number of file descriptors a router can have open at one time"
     default: 100000
-
-  healthchecker.failure_counter_file:
-    description: "File used by the healthchecker to monitor consecutive failures."
-    default: /var/vcap/data/gorouter/counters/consecutive_healthchecker_failures.count

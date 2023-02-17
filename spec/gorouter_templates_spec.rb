@@ -159,7 +159,7 @@ describe 'gorouter' do
           'min_tls_version' => 'TLSv1.2',
           'max_tls_version' => 'TLSv1.2',
           'disable_http' => false,
-          'ca_certs' => [TEST_CERT],
+          'ca_certs' => 'test-certs',
           'cipher_suites' => 'test-suites',
           'forwarded_client_cert' => ['test-cert'],
           'isolation_segments' => '[is1]',
@@ -169,7 +169,6 @@ describe 'gorouter' do
           'route_services_secret_decrypt_only' => 'secret',
           'route_services_recommend_https' => false,
           'extra_headers_to_log' => 'test-header',
-          'max_header_kb' => 1_024,
           'enable_proxy' => false,
           'force_forwarded_proto_https' => false,
           'sanitize_forwarded_proto' => false,
@@ -177,13 +176,11 @@ describe 'gorouter' do
           'max_idle_connections' => 100,
           'keep_alive_probe_interval' => '1s',
           'backends' => {
-            'max_attempts' => 3,
             'max_conns' => 100,
             'cert_chain' => TEST_CERT,
             'private_key' => TEST_KEY
           },
           'route_services' => {
-            'max_attempts' => 3,
             'cert_chain' => ROUTE_SERVICES_CLIENT_TEST_CERT,
             'private_key' => ROUTE_SERVICES_CLIENT_TEST_KEY
           },
@@ -197,7 +194,6 @@ describe 'gorouter' do
         'golang' => {},
         'request_timeout_in_seconds' => 100,
         'endpoint_dial_timeout_in_seconds' => 6,
-        # the websocket_dial_timeout_in_seconds will default to the value of endpoint_dial_timeout_in_seconds if not set
         'tls_handshake_timeout_in_seconds' => 9,
         'routing_api' => {
           'enabled' => false,
@@ -249,12 +245,6 @@ describe 'gorouter' do
           expect do
             rendered_template
           end.to raise_error(/Invalid router.debug_address/)
-        end
-      end
-
-      describe 'max_header_kb' do
-        it 'should set max_header_kb' do
-          expect(parsed_yaml['max_header_bytes']).to eq(1_048_576)
         end
       end
 
@@ -384,22 +374,6 @@ describe 'gorouter' do
         end
       end
 
-      context 'route_services_internal_lookup_allowlist' do
-        it 'defaults to empty array' do
-          expect(parsed_yaml['route_services_hairpinning_allowlist']).to eq([])
-        end
-
-        context 'when set to a list' do
-          before do
-            deployment_manifest_fragment['router']['route_services_internal_lookup_allowlist'] = ['route-service.com', '*.example.com']
-          end
-
-          it 'parses to the same list' do
-            expect(parsed_yaml['route_services_hairpinning_allowlist']).to eq(['route-service.com', '*.example.com'])
-          end
-        end
-      end
-
       context 'html_error_template' do
         it 'is not set by default' do
           expect(parsed_yaml['html_error_template_file']).to be_nil
@@ -473,19 +447,8 @@ describe 'gorouter' do
       describe 'connection and request timeouts' do
         it 'should configure properly' do
           expect(parsed_yaml['endpoint_dial_timeout']).to eq('6s')
-          expect(parsed_yaml['websocket_dial_timeout']).to eq('6s')
           expect(parsed_yaml['tls_handshake_timeout']).to eq('9s')
           expect(parsed_yaml['endpoint_timeout']).to eq('100s')
-        end
-      end
-
-      describe 'explicitly set websocket_dial_timeout' do
-        before do
-          deployment_manifest_fragment['websocket_dial_timeout_in_seconds'] = 8
-        end
-        it 'should configure properly' do
-          expect(parsed_yaml['endpoint_dial_timeout']).to eq('6s')
-          expect(parsed_yaml['websocket_dial_timeout']).to eq('8s')
         end
       end
 
@@ -520,27 +483,6 @@ describe 'gorouter' do
       end
 
       describe 'route_services' do
-        context 'when max_attempts is set correctly' do
-          it 'should configure the property' do
-            expect(parsed_yaml['route_services']['max_attempts']).to eq(3)
-          end
-        end
-        context 'when max_attempts is set to 0' do
-          before do
-            deployment_manifest_fragment['router']['route_services']['max_attempts'] = 0
-          end
-          it 'should error' do
-            expect { raise parsed_yaml }.to raise_error(RuntimeError, 'router.route_services.max_attempts must maintain a minimum value of 1')
-          end
-        end
-        context 'when max_attempts is negative' do
-          before do
-            deployment_manifest_fragment['router']['route_services']['max_attempts'] = -1
-          end
-          it 'should error' do
-            expect { raise parsed_yaml }.to raise_error(RuntimeError, 'router.route_services.max_attempts must maintain a minimum value of 1')
-          end
-        end
         context 'when both cert_chain and private_key are provided' do
           it 'should configure the property' do
             expect(parsed_yaml['route_services']['cert_chain']).to eq(ROUTE_SERVICES_CLIENT_TEST_CERT)
@@ -576,27 +518,6 @@ describe 'gorouter' do
       end
 
       describe 'backends' do
-        context 'when max_attempts is set correctly' do
-          it 'should configure the property' do
-            expect(parsed_yaml['backends']['max_attempts']).to eq(3)
-          end
-        end
-        context 'when max_attempts is set to 0' do
-          before do
-            deployment_manifest_fragment['router']['backends']['max_attempts'] = 0
-          end
-          it 'should configure the property with indefinite retries' do
-            expect(parsed_yaml['backends']['max_attempts']).to eq(0)
-          end
-        end
-        context 'when max_attempts is negative' do
-          before do
-            deployment_manifest_fragment['router']['backends']['max_attempts'] = -1
-          end
-          it 'should error' do
-            expect { raise parsed_yaml }.to raise_error(RuntimeError, 'router.backends.max_attempts cannot be negative')
-          end
-        end
         context 'when both cert_chain and private_key are provided' do
           it 'should configure the property' do
             expect(parsed_yaml['backends']['cert_chain']).to eq(TEST_CERT)
@@ -646,7 +567,7 @@ describe 'gorouter' do
             context 'when only_trust_client_ca_certs is true' do
               before do
                 deployment_manifest_fragment['router']['client_ca_certs'] = 'cool potato'
-                deployment_manifest_fragment['router']['ca_certs'] = ['lame rhutabega']
+                deployment_manifest_fragment['router']['ca_certs'] = 'lame rhutabega'
                 deployment_manifest_fragment['router']['only_trust_client_ca_certs'] = true
               end
 
@@ -661,14 +582,14 @@ describe 'gorouter' do
 
             context 'when only_trust_client_ca_certs is false' do
               before do
-                deployment_manifest_fragment['router']['client_ca_certs'] = TEST_CERT
-                deployment_manifest_fragment['router']['ca_certs'] = [TEST_CERT2, 'cert-too-short']
+                deployment_manifest_fragment['router']['client_ca_certs'] = 'cool potato'
+                deployment_manifest_fragment['router']['ca_certs'] = 'lame rhutabega'
                 deployment_manifest_fragment['router']['only_trust_client_ca_certs'] = false
               end
 
-              it 'client_ca_certs contain only valid ca_certs' do
-                expect(parsed_yaml['client_ca_certs']).to_not include('cert-too-short')
-                expect(parsed_yaml['client_ca_certs']).to eq("#{TEST_CERT}\n#{TEST_CERT2}")
+              it 'client_ca_certs do contain ca_certs' do
+                expect(parsed_yaml['client_ca_certs']).to include('cool potato')
+                expect(parsed_yaml['client_ca_certs']).to include('lame rhutabega')
               end
 
               it 'sets only_trust_client_ca_certs to false' do
@@ -681,7 +602,7 @@ describe 'gorouter' do
         context 'ca_certs' do
           context 'when correct ca_certs is provided' do
             it 'should configure the property' do
-              expect(parsed_yaml['ca_certs']).to eq([TEST_CERT])
+              expect(parsed_yaml['ca_certs']).to eq('test-certs')
             end
           end
 
@@ -694,48 +615,21 @@ describe 'gorouter' do
             end
           end
 
-          context 'when a string is provided' do
+          context 'when a simple array is provided' do
             before do
-              deployment_manifest_fragment['router']['ca_certs'] = 'some-tls-cert'
+              deployment_manifest_fragment['router']['ca_certs'] = ['some-tls-cert']
             end
             it 'raises error' do
-              expect { parsed_yaml }.to raise_error(RuntimeError, 'ca_certs must be provided as an array of strings containing one or more certificates in PEM encoding')
+              expect { parsed_yaml }.to raise_error(RuntimeError, 'ca_certs must be provided as a single string block')
             end
           end
 
-          context 'when an empty string is provided' do
+          context 'when an empty array is provided' do
             before do
-              deployment_manifest_fragment['router']['ca_certs'] = ''
+              deployment_manifest_fragment['router']['ca_certs'] = []
             end
             it 'raises error' do
-              expect { parsed_yaml }.to raise_error(RuntimeError, 'ca_certs must be provided as an array of strings containing one or more certificates in PEM encoding')
-            end
-          end
-
-          context 'when one of the certs is empty' do
-            before do
-              deployment_manifest_fragment['router']['ca_certs'] = [' ', TEST_CERT]
-            end
-            it 'only keeps non-empty certs' do
-              expect(parsed_yaml['ca_certs']).to eq([TEST_CERT])
-            end
-          end
-
-          context 'when one of the certs is nil' do
-            before do
-              deployment_manifest_fragment['router']['ca_certs'] = [nil, TEST_CERT]
-            end
-            it 'only keeps non-empty certs' do
-              expect(parsed_yaml['ca_certs']).to eq([TEST_CERT])
-            end
-          end
-
-          context 'when one of the certs is less than 50 char' do
-            before do
-              deployment_manifest_fragment['router']['ca_certs'] = ['meow-meow-meow-meow', TEST_CERT]
-            end
-            it 'only keeps longer value certs' do
-              expect(parsed_yaml['ca_certs']).to eq([TEST_CERT])
+              expect { parsed_yaml }.to raise_error(RuntimeError, 'ca_certs must be provided as a single string block')
             end
           end
 
@@ -757,10 +651,10 @@ describe 'gorouter' do
             end
 
             before do
-              deployment_manifest_fragment['router']['ca_certs'] = [test_certs]
+              deployment_manifest_fragment['router']['ca_certs'] = test_certs
             end
             it 'successfully configures the property' do
-              expect(parsed_yaml['ca_certs']).to eq([test_certs])
+              expect(parsed_yaml['ca_certs']).to eq(test_certs)
             end
           end
         end
@@ -1141,63 +1035,6 @@ describe 'gorouter' do
           end
         end
       end
-
-      context 'max_header_kb' do
-        context 'less than 1' do
-          before do
-            deployment_manifest_fragment['router']['max_header_kb'] = 0
-          end
-          it 'throws an error' do
-            expect { parsed_yaml }.to raise_error(/Invalid router.max_header_kb/)
-          end
-        end
-
-        context 'greater than 1mb' do
-          before do
-            deployment_manifest_fragment['router']['max_header_kb'] = 1024 + 1
-          end
-          it 'throws an error' do
-            expect { parsed_yaml }.to raise_error(/Invalid router.max_header_kb/)
-          end
-        end
-      end
-    end
-  end
-
-  describe 'healthchecker.yml' do
-    let(:template) { job.template('config/healthchecker.yml') }
-    let(:rendered_template) do
-      template.render(
-        {
-          'router' =>
-            {
-              'logging_level' => 'debug',
-              'status' => { 'port' => 8090, 'user' => 'some-user', 'password' => 'some-password' }
-            }
-        }
-      )
-    end
-
-    subject(:parsed_yaml) { YAML.safe_load(rendered_template) }
-
-    it 'populates component name' do
-      expect(parsed_yaml['component_name']).to eq('gorouter-healthchecker')
-    end
-
-    it 'sets the log level' do
-      expect(parsed_yaml['log_level']).to eq('debug')
-    end
-
-    it 'sets the healthcheck endpoint' do
-      expect(parsed_yaml['healthcheck_endpoint']).to eq(
-        {
-          'host' => '0.0.0.0',
-          'port' => 8090,
-          'user' => 'some-user',
-          'password' => 'some-password',
-          'path' => '/healthz'
-        }
-      )
     end
   end
 
@@ -1266,45 +1103,6 @@ describe 'gorouter' do
 
       it 'consists of the rendered template' do
         expect(rendered_template).to eq("<html>error</html>\n")
-      end
-    end
-  end
-
-  describe 'pre-start' do
-    let(:template) { job.template('bin/pre-start') }
-    let(:properties) do
-      { 'router' => {
-        'port' => 81,
-        'status' => { 'port' => 8081 },
-        'prometheus' => { 'port' => 7070 },
-        'tls_port' => 442,
-        'debug_address' => '127.0.0.1:17003'
-      } }
-    end
-
-    context 'ip_local_reserved_ports' do
-      it 'contains reserved ports in order' do
-        rendered_template = template.render(properties)
-        ports = '81,442,2822,2825,3458,3459,3460,3461,7070,8081,8853,17003,53080'
-        expect(rendered_template).to include("\"#{ports}\" > /proc/sys/net/ipv4/ip_local_reserved_ports")
-      end
-
-      context 'when prometheus port is not set' do
-        it 'skips that port' do
-          properties['router'].delete('prometheus')
-          rendered_template = template.render(properties)
-          ports = '81,442,2822,2825,3458,3459,3460,3461,8081,8853,17003,53080'
-          expect(rendered_template).to include("\"#{ports}\" > /proc/sys/net/ipv4/ip_local_reserved_ports")
-        end
-      end
-
-      context 'when debug_address does not contain a port' do
-        it 'skips that port' do
-          properties['router']['debug_address'] = 'meow'
-          rendered_template = template.render(properties)
-          ports = '81,442,2822,2825,3458,3459,3460,3461,7070,8081,8853,53080'
-          expect(rendered_template).to include("\"#{ports}\" > /proc/sys/net/ipv4/ip_local_reserved_ports")
-        end
       end
     end
   end

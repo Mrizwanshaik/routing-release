@@ -17,6 +17,7 @@ code.cloudfoundry.org/routing-api
 code.cloudfoundry.org/routing-api-cli
 code.cloudfoundry.org/routing-info
 code.cloudfoundry.org/runtimeschema
+code.cloudfoundry.org/uaa-go-client
 code.cloudfoundry.org/trace-logger
 EOF
 
